@@ -1,0 +1,636 @@
+---
+title: "RBI112_Course_Proj_SH"
+author: "Sammi Huang"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 4
+    fig_caption: yes
+    code_folding: hide
+    number_sections: true
+  pdf_document:
+    toc: true
+vignette: >
+    %\VignetteIndexEntry{Week 1 Notes}
+    %\usepackage[utf8]{inputenc}
+    %\VignetteEngine{knitr::rmarkdown}
+fontsize: 15pt
+# bibliography: bibtex.bib
+editor_options: 
+  chunk_output_type: console
+---
+
+<style>
+pre code, pre, code {
+  white-space: pre !important;
+  overflow-x: auto !important;
+  word-break: keep-all !important;
+  word-wrap: initial !important;
+}
+body {
+.lightgreen table {
+  background-color:#eff8e5;
+}
+
+.yellow table {
+  background-color:#ffff99;
+}
+text-align: justify}
+</style>
+
+---
+
+# Introduction:
+Cancer is a multifaceted disease characterized by a number of cellular alterations that lead to uncontrolled cell proliferation. Depending on the cancer type, the disease is met with a very poor survival rate and limited treatment options which often have severe side effects and have marginal effects at best. To put this into perspective, individuals have about a 50% chance of developing cancer in their lifetime (PMID: 21772332, PMID: 25647015). Like many types of cancer, I would argue that most diseases do not have a cure and are only managed by the medical field. My point behind mentioning this information is not to be grim minded or negative, it’s to point out that serious biological problems exist in this world that do not have answers. In this field, whether you work in an academic, industry, or teaching setting you will have the opportunity and privilege to participate in the discovery, implementation, or communication, respectively, of information geared towards finding solutions to these problems. In my opinion, there is no better use of my time and I can not think of anything more important to direct my efforts towards. The challenges you face in this class, once you overcome them (which you will with some perseverance) will provide you with a skill set that contributes to solving these issues, even if you feel as though your contributions are marginal, they have a large collective impact. This course project is geared towards implementing the concepts in this course to develop a model for the classification of breast cancer. These types of analyses have a high degree of clinical relevance as precision oncology continues to become more main stream. So, let’s get down to business.
+
+## Introduction to TCGA
+The Cancer Genome Atlas (TCGA) is a cancer genomics database launched in 2006 containing sequencing profiles annotated with patient meta data for over 20,000 primary cancer samples comprising 33 cancer types matched with normal control samples. Although gene expression profiles housed in this database are of primary concern for this course, TCGA houses multi-Omics data types including whole genome methylation patterns, DNA copy numbers, and microRNA profiles. Numerous landmark discoveries on tumor characteristics, classification, and treatment have eminated from the TCGA database which continues to be an exemplary source of data for researchers to bridge genomic information into clinical applications. Although TCGA is a profound resource, as with everything in life, it is not without its limitations. For example, TCGA contains molecular data curated from bulk tissue samples which is nor resolved at single cell resolution. Since mounting evidence indicates there is extensive cellular heterogeniety within a tumor it is difficult to investigate the level of tumor heterogeneity within the context of the TCGA database. However, within the scope of this course, and within the applications of sequencing technologies in diagnostics and precision medicine, the TCGA database will serve us well.
+
+Although most of the content is directly available through their website here. We will be accessing the data through their application programming interfact (API) which will allow us to select data profiles we are interested in and import them directly into R. Although the resources on the TCGA website are quite extensive, obtaining the raw data provides greater flexibility and freedom to perform custom analyses not available on the website. The following sections illustrate how to download data including the data necessary for your course project.
+
+# TCGA data
+load packages:
+```{r TCGA data, eval=TRUE, echo=TRUE, message=FALSE, warning=FALSE, class.source = "fold-show", cache=FALSE}
+#BiocManager::install("TCGAbiolinks")
+#BiocManager::install("EDASeq")
+library(TCGAbiolinks); library(EDASeq)
+
+#information on types of cancer datasets are available through TCGA via getGDCprojects()
+
+projects <- getGDCprojects()
+head(projects[,c("id","project_id","released","tumor")])
+
+#determine the number of RNAseq samples, and specify control samples, that are available for each project:
+id <- projects$id
+smpls <- list()
+for(i in 1:length(id)){
+  temp <- NULL
+  query_Target <- NULL
+  tryCatch({
+    query_Target <- GDCquery(project = id[i], 
+                             data.category = "Transcriptome Profiling", 
+                             data.type = "Gene Expression Quantification",
+                             workflow.type = "STAR - Counts")
+  }, error= function(e){cat("ERROR", id[i], ":" ,conditionMessage(e), "\n")})
+  if(!is.null(query_Target)){
+  samplesDown_Target <- getResults(query_Target)#, cols = c("cases"))
+  temp[[1]] <- table(samplesDown_Target$sample_type)
+  names(temp) <- id[i]
+  } else {
+    temp[[1]] <- NA
+    names(temp) <- id[i]
+  }
+  smpls <- c(smpls, temp)
+}
+
+#check list to narrow down the cancer we would like to work on into four diff projects (CPTAC-3, REB-THYR, TCGA-COAD, TCGA-BRCA)
+smpls
+
+posIDs <- c("CPTAC-3", "REBC-THYR", "TCGA-COAD", "TCGA-BRCA")
+projects[projects$id %in% posIDs, ]
+#Based on bases, breast cancer carcinoma has the greatest number of samples, focus on breast cancer in this course project:
+smpls[names(smpls) %in% posIDs[3:4]]
+```
+
+# Data Download
+The code illustrated below downloads 133 breast cancer and control samples from the TCGA-BRCA project. The `getProjectSummary()` function returns information about what genomics data is available for a specific project. In this case, as shown below, the TCGA-BRCA project has data on several genomic features. For our purposes, we will look at the “Transcriptome Profiling” datasets.
+```{r Data Download, eval=TRUE, echo=TRUE, message=FALSE, warning=FALSE, class.source = "fold-show", cache=FALSE}
+#gets summary and information about genomics data specific for project -- we will be looking at "transcriptome profiling" datasets
+TCGAbiolinks:::getProjectSummary("TCGA-BRCA")
+```
+
+In this next set of code, we specify that we are interested in “Transcriptome Profiling” data from the “TCGA-BRCA” database in the` GDCquery()` function. This information returned from this function is passed onto the `getResults()` function that returns the file names and ids that can be downloaded.
+```{r Transcriptome Profile, eval=TRUE, echo=TRUE, message=FALSE, warning=FALSE, class.source = "fold-show", cache=FALSE}
+#interested in "Transcriptome Profiling" from "TCGA BRCA" database in GDCquery() function.
+
+#### Downloading and prepare TARGET CASE ####
+TargetSamples <- GDCquery(project = "TCGA-BRCA", 
+                         data.category = "Transcriptome Profiling", 
+                         data.type = "Gene Expression Quantification",
+                         workflow.type = "STAR - Counts")
+#### obtain case information ####
+CaseInfo <- getResults(TargetSamples)#, cols = c("cases"))
+head(CaseInfo)
+```
+
+Instead of downloading the entire data set, we can subset the which records we would like to download. In the example illustrated below, 113 cancer and control data sets are downloaded. Although model building performance is typically better with more data, there might be limitations to the amount of data a computer can handle based on the available RAM. If the entire 226 samples cannot be loaded in your computer, you will need to download fewer samples until the daya can be loaded.
+```{r data downloading, eval=TRUE, echo=TRUE, message=FALSE, warning=FALSE, class.source = "fold-show", cache=FALSE}
+#### subset samples so that there is an equal number of cancer and control samples ####
+dataPrimary_Target <- TCGAquery_SampleTypes(barcode = CaseInfo$cases, typesample = "TP") # primary tumor
+dataNormal_Target <- TCGAquery_SampleTypes(barcode = CaseInfo$cases, typesample = "NT") # normal tissue
+dataPrimary_Target <- dataPrimary_Target[1:113]
+dataNormal_Target <- dataNormal_Target[1:113]
+#### downloaded samples of interest ####
+TargetSamples <- GDCquery(project = "TCGA-BRCA",
+                             data.category = "Transcriptome Profiling",
+                             data.type = "Gene Expression Quantification",
+                             workflow.type = "STAR - Counts",
+                             barcode = c(dataPrimary_Target, dataNormal_Target))
+#### Download the data (Note: Depending on your computer, you may not have enough RAM to process this amount of data. If this happens, please subset the data
+#### to include 50 cancer and 50 normal tissue samples)
+GDCdownload(TargetSamples, dir = "C:\\Users\\sammi\\Desktop\\Brandeis\\RBIF112 Mathematical modeling\\Course_project") # will download 226 files and about 960 MB of data
+```
+
+## Data Preparation
+The `TCGAbiolinks` package contains pre-scripted functions that handle the downloaded data and format it into a `summarizedExperiment` object, here called `data` that contains all of the meta data as well as meta data that is associated with the raw data set. As we can see there is a wealth of information for both the column meta data accessed with `thecolData()` function as well as the row meta data accessed with the `rowData()` function. After looking a These data sets, we can ask several questions such as: Can we predict what stage the tumor is in? Can we predict if a tissue sample is from a tumor or normal tissue? Is there an ethnicity component to the gene expression profiles? Can we predict days to death or vital status?
+```{r data preparation, eval=TRUE, echo=TRUE, message=FALSE, warning=FALSE, class.source = "fold-show", cache=FALSE}
+data <- GDCprepare(TargetSamples, dir ="C:\\Users\\sammi\\Desktop\\Brandeis\\RBIF112 Mathematical modeling\\Course_project" )
+
+assays(data)
+colData(data)
+rowData(data) # gene_type has a number of features in it that may be important
+
+table(rowData(data)$gene_type)  # focus on 'protein_coding' genes - important for cellular function and regulation of gene expression
+```
+Each one of these RNA types has a specialized function. Although the precise functions of each one of these RNA species is beyond the scope of this course, I heavily encourage everyone to learn as much as they can about their importance in cellular function. For now, let’s focus on `protein_coding` genes in part since they make up the majority of the records in the data, and because they are of critical importance to cellular function and the regulation of gene expression. the following code will perform this filtering.
+
+```{r filter data, eval=TRUE, echo=TRUE, message=FALSE, warning=FALSE, class.source = "fold-show", cache=FALSE}
+#filter for "protein_coding"
+SECoding <- data[rowData(data)$gene_type == "protein_coding", ]
+#### The following function will return the data from specified slots in the summarizedExperiment object ####
+dataPrep_Coding <- TCGAanalyze_Preprocessing(object = SECoding, cor.cut = 0.6,  datatype = "fpkm_unstrand")
+# Number of outliers: 0
+```
+Next, lets take a look at the numeric values that are represented for each of the data sets we downloaded. We typically do this in order to assess for batch effects in the data. In other words features in the data that are present due to sample processing or as an artifact of different sequencing platforms used to generate the data. We will briefly explore this using box plots. As we can see in the graphs illustrated below. the quantiles are not similar between samples which is an indication of batch effects in the data.
+
+```{r boxplot, eval=TRUE, echo=TRUE, message=FALSE, warning=FALSE, class.source = "fold-show", cache=FALSE}
+boxplot(dataPrep_Coding, outline = FALSE)
+
+```
+Therefore, we will perform a quantile normalization on the samples in an attempt to eliminate batch effects. There are pros and cons to performing this type of normalization. The benefit to normalizing the data includes minimizing batch effects between samples. The downfall for performing this type of normalization is that biological information that is derived from the expression data is obscured or even lost. This would make it difficult to explore molecular biological information such as signal transduction cascades or the regulation of biochemical pathways. In our context, however, normalization is probably not such a bad idea since we are interested in the development of a predictive model that results in final predictions and overarching sample classifications rather than biological meaning within the data sets. The `TCGAbiolinks` package has a pre-optimized function to perform this normalization using the `TCGAanalyze_Normalization()` followed by the `TCGAanalyze_Filtering()` functions. As illustrated in the boxplots below, once normalized, the samples are more comparable between quantiles compared to the pre-normalized data.
+
+```{r quantile normalization, eval=TRUE, echo=TRUE, message=FALSE, warning=FALSE, class.source = "fold-show", cache=FALSE}
+dataNorm_Coding <- TCGAanalyze_Normalization(tabDF = dataPrep_Coding, geneInfo = geneInfoHT, method = "geneLength")
+dataFilt_Coding <- TCGAanalyze_Filtering(tabDF = dataPrep_Coding, method = "quantile", qnt.cut =  0.25)   
+boxplot(dataNorm_Coding, outline = FALSE)
+
+```
+
+Finally, lets perform differential expression analysis to determine which genes are differential expressed between normal and breast cancer tissues in general.
+```{r differential expression, eval=TRUE, echo=TRUE, message=FALSE, warning=FALSE, class.source = "fold-show", cache=FALSE}
+DEGsCoding <- TCGAanalyze_DEA(mat1 = dataFilt_Coding[,dataNormal_Target],
+                            mat2 = dataFilt_Coding[,dataPrimary_Target],
+                            pipeline="limma",
+                            Cond1type = "Normal",
+                            Cond2type = "Tumor",
+                            fdr.cut = 0.01 ,
+                            logFC.cut = 1,
+                            method = "glmLRT", ClinicalDF = data.frame())
+
+head(DEGsCoding)
+```
+The introduction up to this point provides you with both the data and minimum amount of information required to build mechanistic models for the predictions of and/or classification of breast cancer tumors. 
+
+Your task for this assignment is to take information described in this course and build upon it with your own exploration of this data set leading to the development of a predictive model for the classification of breast cancer samples compared to normal tissue samples. The following subsections provide you with an outline that provides direction to complete the project but the data exploratory portion, how you interpret the results of this exploratory analysis, and how you derive the model is up to you.
+
+
+#Data Exploration
+
+## Gene Correlation
+Which genes are associated with continuous data attributes (e.g. days to death, age, ect…)? 
+Do any of these genes represent confounding variables in the data set?
+Which genes correlate with other genes? to what extent and significance?
+Which meta data features correlate with each other?
+```{r gene correlation, eval=TRUE, echo=TRUE, message=FALSE, warning=FALSE, class.source = "fold-show", cache=FALSE}
+#library(ggplot2)
+#genes associated with continuous data attributes - use correlation, cor()
+names(colData(data)) #"age_at_diagnosis", "days_to_death"
+age <- data$age_at_diagnosis
+age <- age/365 #age was in days
+ge <- dataPrep_Coding
+sample.type <- data$shortLetterCode #TP - primary tumor, NT - normal tissue
+days2death <- as.numeric(data$days_to_death)
+gene.names <- rowData(data)$gene_name
+gene.id <- rowData(data)$gene_id
+year.death <- data$year_of_death
+
+##Need to filter out constant genes that may affect data exploration
+#Set threshold for standard dev to identify constant genes
+threshold <- 0.1  # Adjust this threshold as needed
+gene_sd <- apply(ge, 1, sd)# Calculate the standard deviation for each gene
+filtered_ge <- ge[which(gene_sd > threshold), ]# Filter out constant genes
+#filtered_ge <- t(filtered_ge)
+
+#Calculate the correlation between gene expression (protein_coding) and age
+gene_age_cor <- sapply(seq_len(nrow(filtered_ge)), function(i) {
+  cor(filtered_ge[i, ], age, use = "complete.obs")
+})
+#Find genes with significant correlations
+alpha <- 0.5
+significant.genes.age <- gene.names[gene_age_cor < alpha]
+#Sort top 10 most significant genes associated with age.
+sort.significant.genes.age <- significant.genes.age[order(abs(gene_age_cor[gene_age_cor < alpha]), decreasing = TRUE)]
+top20.significant.genes.age <- sort.significant.genes.age[1:20]
+cat("Top 10 most significant genes asspcoated with age:", top20.significant.genes.age)
+
+assoc.age.sampletype <- data.frame(Gene = character(0), P_Value = numeric(0))
+
+#Check to see if the genes associated with age confounds with sample type? whats the p-value of these genes? 
+for (gene_name in top20.significant.genes.age){
+  #find index of the current gene in the list of genes
+  gene.index <- which(rowData(data)$gene_name == gene_name)
+  if (length(gene.index) > 0 ){
+    #subset the gene expression data for TP and NT samples
+    curr.gene.expr.TP <- filtered_ge[gene.index, data$shortLetterCode == "TP"]
+    curr.gene.expr.NT <- filtered_ge[gene.index, data$shortLetterCode == "NT"]
+    #perform t-test between TP and NT samples
+    age.sampletype.ttest <- t.test(curr.gene.expr.TP, curr.gene.expr.NT)
+    #store the results in the associations dataframe
+    assoc.age.sampletype <- rbind(assoc.age.sampletype, data.frame(Gene=gene_name, P_Value = age.sampletype.ttest$p.value))
+  }
+}
+#Adjust p-values?
+adj.assoc.agesampletype.pval <- p.adjust(assoc.age.sampletype$P_Value, method = "BH")
+assoc.age.sampletype$Adj_P_Value <- adj.assoc.agesampletype.pval
+#sort the dataframe in ascending order (most significant first)
+sort.assoc.age.sampletype <- assoc.age.sampletype[order(assoc.age.sampletype$Adj_P_Value),] 
+print(sort.assoc.age.sampletype) #The genes found from age confounds with certain sample types of BRCA
+
+#How does the top 20 genes we found form age correlate with other genes in filtered_ge?
+#initialize empty list to store correlation matrices
+correlation_matrices <- list()
+#Check which genes are correlated with other genes in this list
+for (gene in sort.assoc.age.sampletype$Gene){
+  genepair.index <- which(rowData(data)$gene_name == gene)
+  #subset the gene expression data
+  genepair.expr <- filtered_ge[genepair.index,]
+  #calculate the correlations between the current gene and all other genes
+  genepair.cor <- cor(t(filtered_ge), genepair.expr, method ="pearson")
+  #store the correlation matrix in a list
+  correlation_matrices[[gene]] <- genepair.cor
+}
+
+#To determine the extent (strength of correlation) and significance (p-value) of correlations between these genes, we will extract correlation coefficients and p-values. Highly correlated genes may be functionally related or co-regulated.
+
+#initialize empty correlation matrix
+gene_correlation_matrix <- matrix(NA, nrow = ncol(filtered_ge), ncol = ncol(filtered_ge))
+#initialize vector to store gene names
+gene_names <- character(ncol(filtered_ge))
+#loop through each pair of genes and calculate correlation
+for (i in 1:(ncol(filtered_ge)-1)){
+  for(j in (i+1):ncol(filtered_ge)){
+    gene1  <- filtered_ge[,i]
+    gene2 <- filtered_ge[,j]
+    #exclude missing values (NAs) when calculating correlation
+    valid_rows <- complete.cases(gene1, gene2)
+    if(sum(valid_rows)>=2){
+      correlation_coefficient <- cor(gene1[valid_rows], gene2[valid_rows], method = "pearson")
+      gene_correlation_matrix[i,j] <- correlation_coefficient
+      gene_correlation_matrix[j, i] <- correlation_coefficient
+      #Assign gene names to corresponding indices
+      gene_names[i] <- gene.names[i]
+      gene_names[j] <- gene.names[j]
+    }
+  }
+}
+#set diagonal elements to 1 (genes correlated with themselves)
+diag(gene_correlation_matrix) <- 1
+#set row and column names
+rownames(gene_correlation_matrix) <- gene_names
+colnames(gene_correlation_matrix) <- gene_names
+#gene_correlation_matrix contains correlation coefficients between genes - use this to identify highly correlated genes and assess the extent and significance of these correlations
+#set correlation threshold for identifying highly correlated genes
+correlation_threshold <- 0.8
+#identify highly correlated gene pairs
+highly_correlated_genes <- list()
+# Loop through all pairs of genes
+for (i in 1:(ncol(filtered_ge) - 1)) {
+  for (j in seq(i + 1, ncol(filtered_ge))) {
+    correlation_coefficient <- gene_correlation_matrix[i, j]
+    
+    if (abs(correlation_coefficient) >= correlation_threshold) {
+      # Calculate the p-value of the correlation using the gene_correlation_matrix
+      p_value <- cor.test(gene_correlation_matrix[i, ], gene_correlation_matrix[j, ], method = "pearson")$p.value
+      
+      # Store information about highly correlated genes
+      gene_pair <- c(rownames(gene_correlation_matrix)[i], rownames(gene_correlation_matrix)[j])
+      correlation_strength <- correlation_coefficient
+      significance <- format(p_value, nsmall = 5)
+      
+      highly_correlated_genes[[paste(i, j, sep = "-")]] <- list(
+        GenePair = gene_pair,
+        CorrelationStrength = correlation_strength,
+        Significance = significance
+      )
+    }
+  }
+}
+# Sort the highly correlated genes by both strength and significance
+sorted_gene_indices <- order(
+  sapply(highly_correlated_genes, function(x) abs(x$CorrelationStrength)),
+  decreasing = TRUE
+)
+
+# Print the top 20 highly correlated genes. These gene pairs have high positive correlation and are statistically significant. This suggests that the expression levels of these genes are closely related, and changes in one gene's expression may be associated with changes in the other's expression. 
+cat("Top 20 Highly Correlated Genes:\n")
+for (i in 1:min(20, length(sorted_gene_indices))) {
+  gene_info <- highly_correlated_genes[[sorted_gene_indices[i]]]
+  cat("Gene Pair:", gene_info$GenePair[1], "and", gene_info$GenePair[2], "\n")
+  cat("Correlation Strength:", gene_info$CorrelationStrength, "\n")
+  cat("Significance (p-value):", gene_info$Significance, "\n\n")
+}
+
+
+#Which metadata features correlate with each other?
+#Does age correlate with sample type?
+#filter "TP" and "NP" sample time
+data_TP <- data[data$shortLetterCode == "TP"]
+data_NT <- data[data$shortLetterCode == "NT"]
+# Create contingency tables for age and sample type separately
+contingency_table_TP <- table(data_TP$age_at_diagnosis, data_TP$shortLetterCode)
+contingency_table_NT <- table(data_NT$age_at_diagnosis, data_NT$shortLetterCode)
+# Perform Fisher's exact test for "TP" sample type
+fisher_exact_TP <- fisher.test(contingency_table_TP)
+fisher_exact_NT <- fisher.test(contingency_table_NT)
+chi_square_TP <- chisq.test(contingency_table_TP)
+chi_square_NT <- chisq.test(contingency_table_NT)
+#The p-value for TP and NT are high for fisher and chi square so sample types may not be correlated with age. but the genes found in age do confound with sample type.
+
+age.year.death.cor <- cor(age,days2death, method="pearson", use="complete.obs")
+print(age.year.death.cor)
+```
+## Exploration of variance in the data
+Which genes explain the greatest variance in the data? Which ones explain the least? Please explain why exploring the variance in the data is important for model building and how you would determine which genes to include in the model.
+```{r variance exploration, eval=TRUE, echo=TRUE, message=FALSE, warning=FALSE, class.source = "fold-show", cache=FALSE}
+#Identify genes with the greatest variance in the data (filtered_ge)
+gene.variances <- apply(filtered_ge, 1, sd)
+#sort genes by highest variance
+sorted.gene.variances.high <- gene.names[order(gene.variances,decreasing=TRUE)]
+#sort genes by lowest variance
+sorted.gene.variances.low <- gene.names[order(gene.variances, decreasing=FALSE)]
+# Print genes with highest variance and their variances
+cat("Genes with Highest Variance:\n")
+for (gene_name in sorted.gene.variances.high[1:20]) {  # Adjust the number of genes you want to print
+  variance <- gene.variances[which(gene.names == gene_name)]
+  cat("Gene:", gene_name, "\t Variance:", variance, "\n")
+}
+
+# Print genes with lowest variance and their variances
+cat("\nGenes with Lowest Variance:\n")
+for (gene_name in sorted.gene.variances.low[1:20]) {  # Adjust the number of genes you want to print
+  variance <- gene.variances[which(gene.names == gene_name)]
+  cat("Gene:", gene_name, "\t Variance:", variance, "\n")
+}
+```
+
+Exploring variance in data is important for model building so owe can identify which features have significant variation in their expression levels. Genes with low variance may not provide meaningful information for modeling and may be subjected to noise. High variance features can lead to overfitting in machine learning models. However, selecting high variance can give us insight on any potential biologically relevance and could be the outcome of interest.
+
+
+## Principle Component Analysis
+Perform a PCA analysis on the data and explain is there are any data attributes that are separated into different clusters by the PCA analysis. Please explain why exploring this is important for model building.
+```{r PCA , eval=TRUE, echo=TRUE, message=FALSE, warning=FALSE, class.source = "fold-show", cache=FALSE}
+library(rgl);library(scatterplot3d)
+#convert the gene ids from filtered_ge to gene names.
+filtered_ge_gene_ids <- rownames(filtered_ge)
+filtered_ge_gene_names <- rowData(data)$gene_name[match(filtered_ge_gene_ids, rowData(data)$gene_id)]
+rownames(filtered_ge) <- filtered_ge_gene_names
+#perform PCA analysis:
+#create a new 3D plot window
+open3d()
+colors <- rainbow(length(age))
+pca_result <- prcomp(t(filtered_ge), scale = TRUE)
+plot(pca_result)
+sc3 = scatterplot3d(pca_result$x[,1:3], pch=20, highlight.3d = FALSE, cex.symbol=2, color=colors)
+sc3d.coords <- sc3$xyz.convert(pca_result$x[,1:3])
+#text(sc3d.coords$x,sc3d.coords$y, labels = rownames(filtered_ge),cex=0.8, pos=4)
+# Plot the principal components
+#plot PC1-PC2
+plot(pca_result$x[, 1], pca_result$x[, 2], main = "PCA Plot", col = colors, pch = 19)
+#plot PC2-PC3
+plot(pca_result$x[,2], pca_result$x[,3], main="PCA Plot", col = colors, pch = 19)
+#plot PC1-PC3
+plot(pca_result$x[,1], pca_result$x[,3], main="PCA Plot", col= colors, pch=19)
+#PC1-Pc2-PC3 projection
+plot3d(pca_result$x[,1], pca_result$x[,2], pca_result$x[,3], col=colors, type = "s", size = 2, xlab="PC1", ylab="PC2", zlab="PC3")
+legend3d("topright", legend = unique(rownames(filtered_ge)), pch = 16, col = colors, cex=0.7)
+
+# Save the 3D plot as an interactive HTML widget
+htmlwidgets::saveWidget(widget = rglwidget(), file = "3D_PCA_Plot.html")
+
+# Embed the 3D plot in the R Markdown output
+htmltools::includeHTML("3D_PCA_Plot.html")
+
+```
+
+Across these graphs, we can see 2 major clusters. The dark blues, purple, and pinks are clustered together while light greens and yellows are clustered together. Earlier I was looking at the significance in genes and sample types. We could be seeing clusters of genes that are similar by sample types. 
+
+# Model Development
+Separate into testing and training data sets.
+
+Build a logistic regression/linear regression, random forest, SVM, neural network models on the prediction of which people have breast cancer.
+When building this model, Please consider what parameters can be tuned in each model and describe how you would decide how to set these parameters.
+
+
+```{r models , eval=TRUE, echo=TRUE, message=FALSE, warning=FALSE, class.source = "fold-show", cache=FALSE}
+library(Biobase); library(tree);library(e1071);library(neuralnet)
+#Functions
+#predict.SVM function
+# Define the predict.SVM function
+predict.SVM = list(
+  model = NULL,
+  train = function(f, data, ...) {
+    # Train your SVM model and store it in the predictor
+    predict.SVM$model <<- svm(f, data, ...)
+  },
+  predict = function(newdata = NULL) {
+    # Check that we have data and that the model was trained
+    if (is.null(newdata) || is.null(predict.SVM$model)) {
+      stop("Model not trained or missing data for prediction.")
+    }
+    
+    # Predict using the SVM model
+    predictions <- predict(predict.SVM$model, newdata)
+    
+    # Convert factor predictions into a numeric vector
+    numeric_predictions <- as.numeric(as.character(predictions))
+    
+    return(numeric_predictions)
+  }
+)  
+
+do.check=function(data,model) {
+if ( is.null(data) ) { stop("New data must be specified") }
+if ( is.null(model) ) {
+stop("The model has not been trained yet!")
+}
+}
+
+predictor.LR = list(
+model = NULL,
+train = function(f,data,...) {
+
+predictor.LR$model <<- glm(f, data,
+family="binomial",na.action="na.exclude", maxit=1000, ...)
+},
+predict=function(newdata=NULL) {
+# check that we got data and that the model was already trained:
+do.check(newdata,predictor.LR$model)
+
+as.numeric(
+predict(predictor.LR$model,newdata,type="response") > 0.5
+)
+}
+)
+
+predictor.NN = list(
+model = NULL,
+train = function(f,data,...) {
+# note that we are using our fixed implementation of the neural net:
+predictor.NN$model <<- neuralnet.fx(f, data, ...)
+},
+predict=function(newdata=NULL) {
+do.check(newdata,predictor.NN$model)
+
+as.numeric(
+compute(predictor.NN$model,newdata)$net.result > 0.5
+)
+}
+)
+
+#Cross-validate function
+cross.validate <- function(predictor, formula, data = NULL, method = "random", N = 1000, n.out = 5, ...) {
+  if (is.null(data)) {
+    stop("data must be specified")
+  }
+
+  f.str <- deparse(formula)
+  dependent.name <- sub("\\s*~.*", "", f.str)
+  if (!dependent.name %in% names(data)) {
+    dependent.data <- get(dependent.name, envir = environment(formula))
+    data <- cbind(dependent.data, data)
+    names(data)[1] <- dependent.name
+  } else {
+    ind <- match(dependent.name, names(data))
+    data <- cbind(data[, ind, drop = FALSE], data[, -ind, drop = FALSE])
+  }
+
+  truth <- data[, dependent.name]
+  prediction <- numeric()
+
+  # Split the data into training and test sets
+  for (i in 1:N) {
+    #check if youre in endless loop
+    #cat("Iteration:", i, "\n")
+    leave.out <- sample(nrow(data), size = n.out)
+    training.data <- data[-leave.out, , drop = FALSE]
+    test.data <- data[leave.out, , drop = FALSE]
+    
+    # Train the SVM model within each fold
+    predictor$train(as.formula(paste(dependent.name, "~ .")), training.data, ...)
+    
+    # Make predictions on test data using the trained SVM model
+    pred <- predictor$predict(test.data[, -1, drop = FALSE])
+    truth[(length(truth) + 1):(length(truth) + n.out)] <- test.data[, dependent.name]
+    prediction <- c(prediction, pred)
+  }
+
+  list(truth = truth, prediction = prediction)
+}
+
+assess.prediction=function(truth,predicted,print.results=FALSE) {
+predicted = predicted[ ! is.na(truth) ]
+truth = truth[ ! is.na(truth) ]
+truth = truth[ ! is.na(predicted) ]
+predicted = predicted[ ! is.na(predicted) ]
+result = list()
+result$accuracy = sum(truth==predicted)*100/length(truth)
+if ( print.results ) {
+cat("Total cases that are not NA: ",length(truth),"\n",sep="")
+cat("Correct predictions (accuracy): ",sum(truth==predicted),
+"(",signif(result$accuracy,3),"%)\n",sep="")
+}
+TP = sum(truth==1 & predicted==1)
+TN = sum(truth==0 & predicted==0)
+FP = sum(truth==0 & predicted==1)
+FN = sum(truth==1 & predicted==0)
+P = TP+FN
+N = FP+TN # total number of negatives
+result$TPR = 100*TP/P
+result$TNR = 100*TN/N
+result$PPV = 100*TP/(TP+FP)
+result$FDR = 100*FP/(TP+FP)
+result$FPR = 100*FP/N
+if ( print.results ) {
+cat("TPR (sensitivity)=TP/P: ", signif(result$TPR,3),"%\n",sep="")
+cat("TNR (specificity)=TN/N: ", signif(result$TNR,3),"%\n",sep="")
+cat("PPV (precision)=TP/(TP+FP): ", signif(result$PPV,3),"%\n",sep="")
+cat("FDR (false discovery)=1-PPV: ", signif(result$FDR,3),"%\n",sep="")
+cat("FPR =FP/N=1-TNR: ", signif(result$FPR,3),"%\n",sep="")
+}
+if ( print.results ) { invisible(result) }
+else { result }
+}
+
+
+set.seed(123)
+
+#response variable
+data$has_cancer <-ifelse(data$shortLetterCode == "TP", 1, 0)
+has_cancer <- as.factor(data$has_cancer)
+filtered_ge <- as.data.frame(filtered_ge)
+#pvalues of genes 
+tt.pvals=apply(filtered_ge,1,function(x) t.test( x ~ has_cancer )$p.value )
+df = as.data.frame(t(filtered_ge[order(tt.pvals),]))
+top_gene_indices <- order(tt.pvals)[1:20]
+top_gene_data <- t(filtered_ge[top_gene_indices,])
+data_for_model <- data.frame(top_gene_data, has_cancer)
+# Cross-validate the SVM model top 20 genes
+# Initialize matrices for fit and prediction metrics
+fit.metrics = matrix(ncol = 20, nrow = 3)
+pred.metrics = matrix(ncol = 20, nrow = 3)
+row.names(fit.metrics) = c("ACC", "TPR", "TNR")
+row.names(pred.metrics) = c("ACC", "TPR", "TNR")
+
+# Loop through different numbers of variables (K = 1 to 20)
+for (n.var in 1:20) {
+  # Train your SVM model using your predict.SVM wrapper
+  predict.SVM$train(has_cancer ~ . , df[, 1:n.var, drop = FALSE])
+
+  # Calculate and store fit metrics for each n.var
+  metrics_fit = assess.prediction(has_cancer, predict.SVM$predict(df[, 1:n.var, drop = FALSE]))
+  fit.metrics[, n.var] = c(metrics_fit$accuracy, metrics_fit$TPR, metrics_fit$TNR)
+
+  # Cross-validate using your professor's cross.validate function and store prediction metrics
+  c.val = cross.validate(predictor = predict.SVM, formula = has_cancer ~ . , data = df[, 1:n.var, drop = FALSE])
+  metrics_pred = assess.prediction(c.val$truth, c.val$prediction)
+  pred.metrics[, n.var] = c(metrics_pred$accuracy, metrics_pred$TPR, metrics_pred$TNR)
+}
+
+#Assess prediction accuracy of predict SVM.
+assess.prediction(c.val$truth, c.val$prediction)
+
+#Linear Regression predictor.LR
+cv.LR=cross.validate(predictor.LR, has_cancer ~ ., data=data_for_model)
+assess.prediction(cv.LR$truth, cv.LR$prediction)
+
+#predictor.T (tree model)
+predictor.T = list(
+model = NULL,
+train = function(f,data,...) {
+predictor.T$model <<- tree(f, data, ...)
+},
+predict=function(newdata=NULL) {
+do.check(newdata,predictor.T$model)
+# implementation of predict() for decision tree models
+# is “smart” enough to returns a *factor*; this will cause
+# problems for our cross.validate() function that expects the
+# predictions to be a simple numeric vector, so we convert here:
+as.numeric(as.vector(
+predict(predictor.T$model,newdata,type="class")
+))
+}
+)
+#tree model
+tree_model <- tree(has_cancer ~ ., data= data_for_model)
+cv.t <- cross.validate(predictor.T, has_cancer~.,data=data_for_model)
+assess.prediction(cv.t$truth, cv.t$prediction)
+```
+
+
+## Model Testing
+Compare the performance of each model and describe why you think one model performed better than the others.
+
+The tree model had the highest accuracy among the three models (51.04%). The tree model might have performed better than the other models because they are versatile and can handle both numerical and categorical data. Machine learning models can be helpful depending on the dataset. However, it can be difficult to use as computational complexity and potential to over fit may affect how we interpret the data.
+
